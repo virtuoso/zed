@@ -9,6 +9,10 @@ pub struct TitleBarSettings {
     pub show_branch_name: bool,
     pub show_worktree_name: bool,
     pub show_project_items: bool,
+    #[allow(
+        dead_code,
+        reason = "this fork renders no sign-in control; kept so the setting still parses"
+    )]
     pub show_sign_in: bool,
     pub show_user_menu: bool,
     pub show_menus: bool,

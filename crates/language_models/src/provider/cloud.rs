@@ -1,8 +1,5 @@
-use ai_onboarding::YoungAccountBanner;
 use anyhow::{Result, anyhow};
-use client::{
-    Client, RefreshLlmTokenListener, TelemetrySettings, UserStore, global_llm_token, zed_urls,
-};
+use client::{Client, RefreshLlmTokenListener, TelemetrySettings, UserStore, global_llm_token};
 use cloud_api_client::LlmApiToken;
 use cloud_api_types::OrganizationId;
 use cloud_api_types::Plan;
@@ -25,7 +22,7 @@ pub use settings::ZedDotDevAvailableModel as AvailableModel;
 pub use settings::ZedDotDevAvailableProvider as AvailableProvider;
 use std::sync::Arc;
 use std::time::Duration;
-use ui::{TintColor, prelude::*};
+use ui::prelude::*;
 
 const PROVIDER_ID: LanguageModelProviderId = ZED_CLOUD_PROVIDER_ID;
 const PROVIDER_NAME: LanguageModelProviderName = ZED_CLOUD_PROVIDER_NAME;
@@ -426,6 +423,10 @@ impl LanguageModelProvider for CloudLanguageModelProvider {
 }
 
 #[derive(IntoElement, RegisterComponent)]
+#[allow(
+    dead_code,
+    reason = "this fork renders no subscription UI; kept to limit divergence from upstream"
+)]
 struct ZedAiConfiguration {
     is_connected: bool,
     plan: Option<Plan>,
@@ -476,84 +477,7 @@ fn zed_ai_description(
 
 impl RenderOnce for ZedAiConfiguration {
     fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
-        let has_paid_plan = matches!(
-            self.plan,
-            Some(Plan::ZedPro | Plan::ZedStudent | Plan::ZedBusiness | Plan::ZedVip)
-        );
-
-        let description = zed_ai_description(
-            self.is_connected,
-            self.plan,
-            self.is_zed_model_provider_enabled,
-            self.eligible_for_trial,
-        );
-
-        let manage_subscription_buttons = if has_paid_plan {
-            Button::new("manage_settings", "Manage Subscription")
-                .when(!self.compact, |this| {
-                    this.full_width().label_size(LabelSize::Small)
-                })
-                .when(self.compact, |this| this.size(ButtonSize::Medium))
-                .style(ButtonStyle::Tinted(TintColor::Accent))
-                .on_click(|_, _, cx| cx.open_url(&zed_urls::account_url(cx)))
-                .into_any_element()
-        } else if self.plan.is_none() || self.eligible_for_trial {
-            Button::new("start_trial", "Start 14-day Free Pro Trial")
-                .when(!self.compact, |this| {
-                    this.full_width().label_size(LabelSize::Small)
-                })
-                .when(self.compact, |this| this.size(ButtonSize::Medium))
-                .style(ui::ButtonStyle::Tinted(ui::TintColor::Accent))
-                .on_click(|_, _, cx| cx.open_url(&zed_urls::start_trial_url(cx)))
-                .into_any_element()
-        } else {
-            Button::new("upgrade", "Upgrade to Pro")
-                .when(!self.compact, |this| {
-                    this.full_width().label_size(LabelSize::Small)
-                })
-                .when(self.compact, |this| this.size(ButtonSize::Medium))
-                .style(ui::ButtonStyle::Tinted(ui::TintColor::Accent))
-                .on_click(|_, _, cx| cx.open_url(&zed_urls::upgrade_to_zed_pro_url(cx)))
-                .into_any_element()
-        };
-
-        if !self.is_connected {
-            return v_flex()
-                .gap_2()
-                .when(!self.compact, |this| this.child(Label::new(description)))
-                .child(
-                    Button::new("sign_in", "Sign In to use Zed AI")
-                        .start_icon(
-                            Icon::new(IconName::Github)
-                                .size(IconSize::Small)
-                                .color(Color::Muted),
-                        )
-                        .when(!self.compact, |this| this.full_width())
-                        .on_click({
-                            let callback = self.sign_in_callback.clone();
-                            move |_, window, cx| (callback)(window, cx)
-                        }),
-                );
-        }
-
-        v_flex()
-            .gap_2()
-            .when(!self.compact, |this| this.w_full())
-            .map(|this| {
-                if self.account_too_young {
-                    this.child(YoungAccountBanner).child(
-                        Button::new("upgrade", "Upgrade to Pro")
-                            .style(ui::ButtonStyle::Tinted(ui::TintColor::Accent))
-                            .when(!self.compact, |this| this.full_width())
-                            .on_click(|_, _, cx| {
-                                cx.open_url(&zed_urls::upgrade_to_zed_pro_url(cx))
-                            }),
-                    )
-                } else {
-                    this.when(!self.compact, |this| this.text_sm().child(description))
-                        .child(manage_subscription_buttons)
-                }
-            })
+        gpui::Empty
     }
 }
 

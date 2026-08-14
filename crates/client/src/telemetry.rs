@@ -31,7 +31,6 @@ pub struct HistoricalEvents {
     pub events: Vec<EventWrapper>,
     pub parse_error_count: usize,
 }
-use util::ResultExt as _;
 use worktree::{UpdatedEntriesSet, WorktreeId};
 
 use self::event_coalescer::EventCoalescer;
@@ -369,11 +368,11 @@ impl Telemetry {
     }
 
     pub fn metrics_enabled(self: &Arc<Self>) -> bool {
-        self.state.lock().settings.metrics
+        false
     }
 
     pub fn diagnostics_enabled(self: &Arc<Self>) -> bool {
-        self.state.lock().settings.diagnostics
+        false
     }
 
     pub fn set_authenticated_user_info(
@@ -563,7 +562,11 @@ impl Telemetry {
             .collect()
     }
 
-    fn report_event(self: &Arc<Self>, mut event: Event) {
+    fn report_event(self: &Arc<Self>, _event: Event) {
+        return;
+
+        #[allow(unreachable_code)]
+        let mut event = _event;
         let mut state = self.state.lock();
         // RUST_LOG=telemetry=trace to debug telemetry events
         log::trace!(target: "telemetry", "{:?}", event);
@@ -709,10 +712,7 @@ impl Telemetry {
     }
 
     pub fn flush_events(self: &Arc<Self>) -> Task<()> {
-        let this = self.clone();
-        self.executor.spawn(async move {
-            this.flush_events_inner().await.log_err();
-        })
+        Task::ready(())
     }
 }
 

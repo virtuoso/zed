@@ -1,5 +1,5 @@
 use anyhow::Result;
-use client::{Client, UserStore, zed_urls};
+use client::{UserStore, zed_urls};
 use cloud_llm_client::UsageLimit;
 use codestral::{self, CodestralEditPredictionDelegate};
 use copilot::Status;
@@ -1136,22 +1136,6 @@ impl EditPredictionButton {
                             .into_any_element()
                     })
                     .separator()
-                    .entry("Sign In & Start Using", None, |window, cx| {
-                        telemetry::event!(
-                            "Edit Prediction Menu Action",
-                            action = "sign_in",
-                            provider = "zed",
-                        );
-                        let client = Client::global(cx);
-                        window
-                            .spawn(cx, async move |cx| {
-                                client
-                                    .sign_in_with_optional_connect(true, &cx)
-                                    .await
-                                    .log_err();
-                            })
-                            .detach();
-                    })
                     .link_with_handler(
                         "Learn More",
                         OpenBrowser {
@@ -1223,57 +1207,6 @@ impl EditPredictionButton {
                                     .into_any_element()
                             },
                             move |_, cx| cx.open_url(&zed_urls::account_url(cx)),
-                        )
-                        .when(usage.over_limit(), |menu| -> ContextMenu {
-                            menu.entry("Subscribe to increase your limit", None, |_window, cx| {
-                                telemetry::event!(
-                                    "Edit Prediction Menu Action",
-                                    action = "upsell_clicked",
-                                    reason = "usage_limit",
-                                );
-                                cx.open_url(&zed_urls::account_url(cx))
-                            })
-                        })
-                        .separator();
-                } else if self.user_store.read(cx).account_too_young() {
-                    menu = menu
-                        .custom_entry(
-                            |_window, _cx| {
-                                Label::new("Your GitHub account is less than 30 days old.")
-                                    .size(LabelSize::Small)
-                                    .color(Color::Warning)
-                                    .into_any_element()
-                            },
-                            |_window, cx| cx.open_url(&zed_urls::account_url(cx)),
-                        )
-                        .entry("Upgrade to Zed Pro or contact us.", None, |_window, cx| {
-                            telemetry::event!(
-                                "Edit Prediction Menu Action",
-                                action = "upsell_clicked",
-                                reason = "account_age",
-                            );
-                            cx.open_url(&zed_urls::account_url(cx))
-                        })
-                        .separator();
-                } else if self.user_store.read(cx).has_overdue_invoices() {
-                    menu = menu
-                        .custom_entry(
-                            |_window, _cx| {
-                                Label::new("You have an outstanding invoice")
-                                    .size(LabelSize::Small)
-                                    .color(Color::Warning)
-                                    .into_any_element()
-                            },
-                            |_window, cx| {
-                                cx.open_url(&zed_urls::account_url(cx))
-                            },
-                        )
-                        .entry(
-                            "Check your payment status or contact us at billing-support@zed.dev to continue using this feature.",
-                            None,
-                            |_window, cx| {
-                                cx.open_url(&zed_urls::account_url(cx))
-                            },
                         )
                         .separator();
                 }
