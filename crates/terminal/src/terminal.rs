@@ -65,13 +65,13 @@ use crate::alacritty::{
     AlacrittyCell, AlacrittyGridIterator, AlacrittyHyperlink, AlacrittySearch, AlacrittyTerm,
     AlacrittyTermConfig, AlacrittyTermLock, HyperlinkMatch, PtySender, RegexSearches,
     append_text_to_term, apply_config, clear_saved_screen, content_text, display_offset,
-    display_only_term_config, find_from_terminal_point, full_content_range, last_non_empty_lines,
-    make_content, new_term, open_pty, pty_options, pty_term_config, resize, screen_lines,
-    scroll_display, scroll_to_point, search_matches, selection_text, set_default_cursor_style,
-    set_selection as set_term_selection, shrink_to_used, spawn_event_loop,
-    toggle_vi_mode as toggle_term_vi_mode, total_lines, update_selection as update_term_selection,
-    update_selection_to_vi_cursor, update_vi_cursor_for_scroll, used_lines, vi_goto_point,
-    vi_motion,
+    display_only_term_config, find_from_terminal_point, full_content_range, is_alt_screen,
+    last_non_empty_lines, make_content, new_term, open_pty, pty_options, pty_term_config, resize,
+    screen_lines, scroll_display, scroll_to_point, search_matches, selection_text,
+    set_alt_screen_scrollback, set_default_cursor_style, set_selection as set_term_selection,
+    shrink_to_used, spawn_event_loop, toggle_vi_mode as toggle_term_vi_mode, total_lines,
+    update_selection as update_term_selection, update_selection_to_vi_cursor,
+    update_vi_cursor_for_scroll, used_lines, vi_goto_point, vi_motion,
 };
 use crate::mappings::colors::to_vte_rgb;
 use crate::mappings::keys::to_esc_str;
@@ -993,6 +993,8 @@ impl TerminalBuilder {
             selection_head: None,
             breadcrumb_text: String::new(),
             scroll_px: px(0.),
+            was_in_alt_screen: false,
+            alt_screen_scrollback_enabled: false,
             next_link_id: 0,
             selection_phase: SelectionPhase::Ended,
             hyperlink_regex_searches: RegexSearches::default(),
@@ -1267,6 +1269,8 @@ impl TerminalBuilder {
                 selection_head: None,
                 breadcrumb_text: String::new(),
                 scroll_px: px(0.),
+                was_in_alt_screen: false,
+                alt_screen_scrollback_enabled: false,
                 next_link_id: 0,
                 selection_phase: SelectionPhase::Ended,
                 hyperlink_regex_searches: RegexSearches::new(
@@ -1463,6 +1467,12 @@ pub struct Terminal {
     pub breadcrumb_text: String,
     title_override: Option<String>,
     scroll_px: Pixels,
+    /// Tracks alternate-screen transitions so the alternate grid's scrollback
+    /// is (re)configured exactly once per program that enters it.
+    was_in_alt_screen: bool,
+    /// Last applied value of `alternate_screen_scrollback`, so a change to the
+    /// setting is picked up without waiting for the next alternate-screen entry.
+    alt_screen_scrollback_enabled: bool,
     next_link_id: usize,
     selection_phase: SelectionPhase,
     hyperlink_regex_searches: RegexSearches,
@@ -2339,6 +2349,8 @@ impl Terminal {
             self.process_terminal_event(&e, &mut terminal, window, cx)
         }
 
+        self.maintain_alt_screen_scrollback(&mut terminal, cx);
+
         self.last_content = make_content(&terminal, &self.last_content);
         if self.last_content.grid_lines_change == GridLinesChange::Changed {
             debug_assert!(self.last_content.last_hovered_word.is_none());
@@ -2349,6 +2361,39 @@ impl Terminal {
             if !self.events.is_empty() {
                 cx.emit(Event::Wakeup);
             }
+        }
+    }
+
+    /// Grant the alternate screen a scrollback buffer when a program enters it.
+    ///
+    /// Alacritty discards lines that scroll off the alternate grid, which
+    /// leaves nothing for the wheel or `terminal::ScrollPageUp` to move through
+    /// while a multiplexer like GNU screen is running. Configuring it on the
+    /// transition into the alternate screen (rather than every frame) keeps a
+    /// program's own scrollback from being cleared out from under it.
+    fn maintain_alt_screen_scrollback(&mut self, term: &mut AlacrittyTerm, cx: &App) {
+        let in_alt_screen = is_alt_screen(term);
+        let enabled = TerminalSettings::get_global(cx).alternate_screen_scrollback;
+        // Reacting to the setting as well as the transition means toggling it
+        // takes effect on a program that is already holding the alternate
+        // screen, rather than only on the next one to enter it.
+        if in_alt_screen == self.was_in_alt_screen && enabled == self.alt_screen_scrollback_enabled
+        {
+            return;
+        }
+        self.was_in_alt_screen = in_alt_screen;
+        self.alt_screen_scrollback_enabled = enabled;
+
+        if in_alt_screen {
+            let lines = if enabled {
+                self.template
+                    .max_scroll_history_lines
+                    .unwrap_or(DEFAULT_SCROLL_HISTORY_LINES)
+                    .min(MAX_SCROLL_HISTORY_LINES)
+            } else {
+                0
+            };
+            set_alt_screen_scrollback(term, lines);
         }
     }
 
@@ -5847,5 +5892,185 @@ mod tests {
 
         assert!(terminal.cwd_history.is_empty());
         assert_eq!(terminal.pending_cwd_boundary, None);
+    }
+}
+
+#[cfg(test)]
+mod alternate_screen_scrollback_tests {
+    use super::*;
+    use crate::TerminalBuilder;
+    use gpui::{Entity, TestAppContext, UpdateGlobal as _};
+    use settings::SettingsStore;
+    use util::paths::PathStyle;
+
+    const ENTER_ALT_SCREEN: &[u8] = b"\x1b[?1049h";
+
+    fn build_terminal(cx: &mut TestAppContext, enabled: bool) -> Entity<Terminal> {
+        cx.update(|cx| {
+            let settings_store = SettingsStore::test(cx);
+            cx.set_global(settings_store);
+            SettingsStore::update_global(cx, |store, cx| {
+                store.update_user_settings(cx, |settings| {
+                    settings
+                        .terminal
+                        .get_or_insert_default()
+                        .alternate_screen_scrollback = Some(enabled);
+                });
+            });
+        });
+
+        cx.new(|cx| {
+            TerminalBuilder::new_display_only(
+                SettingsCursorShape::default(),
+                AlternateScroll::On,
+                None,
+                0,
+                cx.background_executor(),
+                PathStyle::local(),
+            )
+            .subscribe(cx)
+        })
+    }
+
+    /// Drives the same transition hook `sync` uses, then scrolls lines off the
+    /// alternate screen.
+    fn enter_alt_screen_and_overflow(
+        terminal: &Entity<Terminal>,
+        cx: &mut TestAppContext,
+    ) -> usize {
+        terminal.update(cx, |terminal, cx| {
+            terminal.write_output(ENTER_ALT_SCREEN, cx);
+        });
+        cx.run_until_parked();
+
+        terminal.update(cx, |terminal, cx| {
+            let term = terminal.term.clone();
+            let mut term_lock = term.lock();
+            terminal.maintain_alt_screen_scrollback(&mut term_lock, cx);
+            assert!(
+                is_alt_screen(&term_lock),
+                "terminal should be on the alternate screen"
+            );
+        });
+
+        let rows = terminal.update(cx, |terminal, _| screen_lines(&terminal.term.lock()));
+        let mut output = Vec::new();
+        for i in 0..(rows * 3) {
+            output.extend_from_slice(format!("line{i}\r\n").as_bytes());
+        }
+        terminal.update(cx, |terminal, cx| {
+            terminal.write_output(&output, cx);
+        });
+        cx.run_until_parked();
+
+        terminal.update(cx, |terminal, _| terminal.term.lock().history_size())
+    }
+
+    #[gpui::test]
+    async fn test_alternate_screen_discards_scrollback_when_disabled(cx: &mut TestAppContext) {
+        let terminal = build_terminal(cx, false);
+        assert_eq!(
+            enter_alt_screen_and_overflow(&terminal, cx),
+            0,
+            "alternate screen should keep no scrollback when the setting is off"
+        );
+    }
+
+    /// The wheel path is separate from the scroll actions: with
+    /// `alternate_scroll` off it falls through to the terminal's own scrollback
+    /// rather than being translated into arrow keys.
+    /// Enabling the setting while a program is already holding the alternate
+    /// screen should take effect without waiting for it to re-enter.
+    #[gpui::test]
+    async fn test_alternate_screen_scrollback_applies_when_toggled_on_live(
+        cx: &mut TestAppContext,
+    ) {
+        let terminal = build_terminal(cx, false);
+        assert_eq!(
+            enter_alt_screen_and_overflow(&terminal, cx),
+            0,
+            "should start with the setting off"
+        );
+
+        cx.update(|cx| {
+            SettingsStore::update_global(cx, |store, cx| {
+                store.update_user_settings(cx, |settings| {
+                    settings
+                        .terminal
+                        .get_or_insert_default()
+                        .alternate_screen_scrollback = Some(true);
+                });
+            });
+        });
+
+        terminal.update(cx, |terminal, cx| {
+            let term = terminal.term.clone();
+            let mut term_lock = term.lock();
+            assert!(is_alt_screen(&term_lock), "still on the alternate screen");
+            terminal.maintain_alt_screen_scrollback(&mut term_lock, cx);
+        });
+
+        let rows = terminal.update(cx, |terminal, _| screen_lines(&terminal.term.lock()));
+        let mut output = Vec::new();
+        for i in 0..(rows * 3) {
+            output.extend_from_slice(format!("after{i}\r\n").as_bytes());
+        }
+        terminal.update(cx, |terminal, cx| terminal.write_output(&output, cx));
+        cx.run_until_parked();
+
+        assert!(
+            terminal.update(cx, |terminal, _| terminal.term.lock().history_size()) > 0,
+            "toggling the setting on should apply without re-entering the alternate screen"
+        );
+    }
+
+    #[gpui::test]
+    async fn test_alternate_screen_wheel_scrolls_retained_scrollback(cx: &mut TestAppContext) {
+        let terminal = build_terminal(cx, true);
+        assert!(enter_alt_screen_and_overflow(&terminal, cx) > 0);
+
+        terminal.update(cx, |terminal, _| {
+            terminal.last_content.terminal_bounds = TerminalBounds::new(
+                px(20.0),
+                px(10.0),
+                gpui::bounds(
+                    gpui::point(px(0.0), px(0.0)),
+                    gpui::size(px(400.0), px(400.0)),
+                ),
+            );
+            terminal.last_content.mode.remove(Modes::ALTERNATE_SCROLL);
+            terminal.events.clear();
+
+            terminal.scroll_wheel(
+                &gpui::ScrollWheelEvent {
+                    position: gpui::point(px(10.0), px(10.0)),
+                    delta: gpui::ScrollDelta::Lines(GpuiPoint::new(0.0, 5.0)),
+                    touch_phase: TouchPhase::Moved,
+                    ..Default::default()
+                },
+                1.0,
+            );
+
+            assert!(
+                terminal
+                    .events
+                    .iter()
+                    .any(|event| matches!(event, InternalEvent::Scroll(_))),
+                "wheel should scroll the terminal's own scrollback, not emit arrow keys"
+            );
+            assert!(
+                terminal.take_pty_write_log().is_empty(),
+                "wheel must not be forwarded to the program as key presses"
+            );
+        });
+    }
+
+    #[gpui::test]
+    async fn test_alternate_screen_retains_scrollback_when_enabled(cx: &mut TestAppContext) {
+        let terminal = build_terminal(cx, true);
+        assert!(
+            enter_alt_screen_and_overflow(&terminal, cx) > 0,
+            "alternate screen should retain lines scrolled off it when enabled"
+        );
     }
 }

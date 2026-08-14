@@ -200,6 +200,27 @@ pub(super) fn new_term(
     Arc::new(FairMutex::new(term))
 }
 
+pub(super) fn is_alt_screen(term: &AlacrittyTerm) -> bool {
+    term.mode().contains(TermMode::ALT_SCREEN)
+}
+
+/// Give the alternate screen's grid a scrollback buffer.
+///
+/// Alacritty constructs the alternate grid with a zero scroll limit, so every
+/// line that scrolls off it is discarded and programs that own the alternate
+/// screen (multiplexers especially) leave the terminal with nothing to scroll.
+/// `Term::grid_mut` addresses whichever grid is currently active, so this is
+/// only meaningful while the alternate screen is the active one.
+///
+/// The limit is cleared first so history left behind by a previous
+/// alternate-screen program cannot leak into this one's scrollback.
+pub(super) fn set_alt_screen_scrollback(term: &mut AlacrittyTerm, lines: usize) {
+    term.grid_mut().update_history(0);
+    if lines > 0 {
+        term.grid_mut().update_history(lines);
+    }
+}
+
 pub(super) fn spawn_event_loop(
     term: Arc<AlacrittyTermLock>,
     events_tx: UnboundedSender<PtyEvent>,

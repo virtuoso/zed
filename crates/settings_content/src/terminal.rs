@@ -111,6 +111,22 @@ pub struct TerminalSettingsContent {
     ///
     /// Default: on
     pub alternate_scroll: Option<AlternateScroll>,
+    /// Sets whether lines scrolled off the top of the alternate screen are kept
+    /// in the scrollback buffer.
+    ///
+    /// Terminal multiplexers such as GNU screen render into the alternate
+    /// screen and keep their own scrollback, which the terminal cannot read.
+    /// When this is off those lines are discarded, so the mouse wheel and
+    /// shift-pageup have nothing to scroll and the multiplexer's copy mode is
+    /// the only way back. Retaining them matches rxvt-unicode's
+    /// `secondaryScroll` and iTerm2's "Save lines to scrollback in alternate
+    /// screen mode".
+    ///
+    /// Note that full-screen applications which repaint in place (vim, less,
+    /// htop) will also push their redraws into the scrollback.
+    ///
+    /// Default: true
+    pub alternate_screen_scrollback: Option<bool>,
     /// Sets whether the option key behaves as the meta key.
     ///
     /// Default: false

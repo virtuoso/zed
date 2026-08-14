@@ -718,8 +718,19 @@ impl TerminalView {
             .contains(Modes::ALT_SCREEN)
     }
 
+    /// Whether the scroll actions belong to the program owning the screen
+    /// rather than to the terminal.
+    ///
+    /// Alternate-screen programs normally get these keys forwarded, since the
+    /// terminal keeps no history behind them. Once `alternate_screen_scrollback`
+    /// is on there is real scrollback to move through, so the terminal keeps
+    /// them instead.
+    fn scroll_keys_belong_to_program(&self, cx: &App) -> bool {
+        self.is_alt_screen(cx) && !TerminalSettings::get_global(cx).alternate_screen_scrollback
+    }
+
     fn scroll_line_up(&mut self, _: &ScrollLineUp, _: &mut Window, cx: &mut Context<Self>) {
-        if self.is_alt_screen(cx) {
+        if self.scroll_keys_belong_to_program(cx) {
             cx.propagate();
             return;
         }
@@ -739,7 +750,7 @@ impl TerminalView {
     }
 
     fn scroll_line_down(&mut self, _: &ScrollLineDown, _: &mut Window, cx: &mut Context<Self>) {
-        if self.is_alt_screen(cx) {
+        if self.scroll_keys_belong_to_program(cx) {
             cx.propagate();
             return;
         }
@@ -759,7 +770,7 @@ impl TerminalView {
     }
 
     fn scroll_page_up(&mut self, _: &ScrollPageUp, _: &mut Window, cx: &mut Context<Self>) {
-        if self.is_alt_screen(cx) {
+        if self.scroll_keys_belong_to_program(cx) {
             cx.propagate();
             return;
         }
@@ -789,7 +800,7 @@ impl TerminalView {
     }
 
     fn scroll_page_down(&mut self, _: &ScrollPageDown, _: &mut Window, cx: &mut Context<Self>) {
-        if self.is_alt_screen(cx) {
+        if self.scroll_keys_belong_to_program(cx) {
             cx.propagate();
             return;
         }
@@ -803,7 +814,7 @@ impl TerminalView {
     }
 
     fn scroll_to_top(&mut self, _: &ScrollToTop, _: &mut Window, cx: &mut Context<Self>) {
-        if self.is_alt_screen(cx) {
+        if self.scroll_keys_belong_to_program(cx) {
             cx.propagate();
             return;
         }
@@ -813,7 +824,7 @@ impl TerminalView {
     }
 
     fn scroll_to_bottom(&mut self, _: &ScrollToBottom, _: &mut Window, cx: &mut Context<Self>) {
-        if self.is_alt_screen(cx) {
+        if self.scroll_keys_belong_to_program(cx) {
             cx.propagate();
             return;
         }
@@ -2165,7 +2176,7 @@ fn first_project_directory(workspace: &Workspace, cx: &App) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gpui::{TestAppContext, VisualTestContext};
+    use gpui::{TestAppContext, UpdateGlobal as _, VisualTestContext};
     use project::{Entry, Project, ProjectPath, Worktree};
     use remote::RemoteClient;
     use std::path::{Path, PathBuf};
@@ -2290,6 +2301,19 @@ mod tests {
     async fn shift_up_is_forwarded_to_program_in_alt_screen(cx: &mut TestAppContext) {
         let (project, _workspace, window_handle) = init_test_with_window(cx).await;
         cx.update(load_default_keymap);
+        // Forwarding is what happens when the terminal keeps no history behind
+        // the alternate screen; with `alternate_screen_scrollback` on there is
+        // something to scroll and the terminal keeps the key instead.
+        cx.update(|cx| {
+            SettingsStore::update_global(cx, |store, cx| {
+                store.update_user_settings(cx, |settings| {
+                    settings
+                        .terminal
+                        .get_or_insert_default()
+                        .alternate_screen_scrollback = Some(false);
+                });
+            });
+        });
         let (_pane, terminal, _terminal_view) =
             add_display_only_terminal(&project, window_handle, true, cx);
 
@@ -2314,6 +2338,39 @@ mod tests {
             terminal.update(&mut cx, |terminal, _| terminal.take_input_log()),
             vec![SHIFT_UP_ESCAPE.to_vec()],
             "shift-up should be forwarded to the program in the alternate screen",
+        );
+    }
+
+    #[gpui::test]
+    async fn shift_up_scrolls_instead_of_forwarding_when_alt_screen_scrollback_is_on(
+        cx: &mut TestAppContext,
+    ) {
+        let (project, _workspace, window_handle) = init_test_with_window(cx).await;
+        cx.update(load_default_keymap);
+        let (_pane, terminal, _terminal_view) =
+            add_display_only_terminal(&project, window_handle, true, cx);
+
+        let mut cx = VisualTestContext::from_window(window_handle.into(), cx);
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+        cx.run_until_parked();
+
+        cx.update(|window, cx| {
+            terminal.update(cx, |terminal, cx| {
+                terminal.write_output(ENTER_ALT_SCREEN, cx);
+                terminal.sync(window, cx);
+            });
+        });
+        terminal.read_with(&cx, |terminal, _| {
+            assert!(terminal.last_content.mode.contains(Modes::ALT_SCREEN));
+        });
+
+        cx.simulate_keystrokes("shift-up");
+        assert_eq!(
+            terminal.update(&mut cx, |terminal, _| terminal.take_input_log()),
+            Vec::<Vec<u8>>::new(),
+            "shift-up should scroll the retained scrollback, not reach the program",
         );
     }
 

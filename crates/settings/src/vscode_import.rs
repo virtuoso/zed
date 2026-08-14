@@ -888,6 +888,7 @@ impl VsCodeSettings {
         let (font_family, font_fallbacks) = self.read_fonts("terminal.integrated.fontFamily");
         skip_default(TerminalSettingsContent {
             alternate_scroll: None,
+            alternate_screen_scrollback: None,
             blinking: self
                 .read_bool("terminal.integrated.cursorBlinking")
                 .map(|b| {
