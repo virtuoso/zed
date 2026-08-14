@@ -3615,14 +3615,11 @@ impl Pane {
         tab_count: usize,
         cx: &mut Context<Pane>,
     ) -> impl IntoElement {
-        h_flex()
+        div()
             .id("unpinned tabs")
-            .overflow_x_scroll()
+            .flex()
+            .flex_wrap()
             .w_full()
-            .track_scroll(&self.tab_bar_scroll_handle)
-            .on_scroll_wheel(cx.listener(|this, _, _, _| {
-                this.suppress_scroll = true;
-            }))
             .children(unpinned_tabs)
             .child(self.render_tab_bar_drop_target(tab_count, cx))
     }

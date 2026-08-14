@@ -97,7 +97,7 @@ impl RenderOnce for TabBar {
             .flex()
             .flex_none()
             .w_full()
-            .h(Tab::container_height(cx))
+            .min_h(Tab::container_height(cx))
             .bg(cx.theme().colors().tab_bar_background)
             .when(!self.start_children.is_empty(), |this| {
                 this.child(
@@ -115,8 +115,7 @@ impl RenderOnce for TabBar {
                 div()
                     .relative()
                     .flex_1()
-                    .h_full()
-                    .overflow_x_hidden()
+                    .overflow_hidden()
                     .child(
                         div()
                             .absolute()
@@ -127,10 +126,11 @@ impl RenderOnce for TabBar {
                             .border_color(cx.theme().colors().border),
                     )
                     .child(
-                        h_flex()
+                        div()
                             .id("tabs")
+                            .flex()
+                            .flex_wrap()
                             .flex_grow_1()
-                            .overflow_x_scroll()
                             .when_some(self.scroll_handle, |cx, scroll_handle| {
                                 cx.track_scroll(&scroll_handle)
                             })
