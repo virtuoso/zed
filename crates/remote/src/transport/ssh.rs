@@ -833,7 +833,11 @@ impl SshRemoteConnection {
     ) -> Result<Arc<RelPath>> {
         let version_str = match release_channel {
             ReleaseChannel::Dev => "build".to_string(),
-            _ => version.to_string(),
+            _ => {
+                let mut v = version.clone();
+                v.build = semver::BuildMetadata::EMPTY;
+                v.to_string()
+            }
         };
         let binary_name = format!(
             "zed-remote-server-{}-{}{}",
