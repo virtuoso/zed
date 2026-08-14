@@ -4688,10 +4688,47 @@ impl Workspace {
             })
         });
 
+        let all_panes: Vec<WeakEntity<Pane>> = self
+            .panes
+            .iter()
+            .map(|p| p.downgrade())
+            .collect();
+
         let project_path = path.into();
         let task = self.load_path(project_path.clone(), window, cx);
         window.spawn(cx, async move |cx| {
             let (project_entry_id, build_item) = task.await?;
+
+            // Check all panes for an existing item before opening a duplicate.
+            for other_pane in &all_panes {
+                if other_pane == &pane {
+                    continue;
+                }
+                let found = other_pane.update_in(cx, |other_pane, window, cx| {
+                    let existing = if let Some(entry_id) = project_entry_id {
+                        other_pane.item_for_entry(entry_id, cx)
+                    } else {
+                        None
+                    }
+                    .or_else(|| other_pane.item_for_path(project_path.clone(), cx));
+
+                    if let Some(item) = existing {
+                        let ix = other_pane
+                            .index_for_item(item.as_ref())
+                            .expect("item must be in pane");
+                        other_pane.activate_item(ix, activate, focus_item, window, cx);
+                        if !allow_preview {
+                            other_pane.unpreview_item_if_preview(item.item_id());
+                        }
+                        Some(item)
+                    } else {
+                        None
+                    }
+                });
+                if let Ok(Some(item)) = found {
+                    return Ok(item);
+                }
+            }
 
             pane.update_in(cx, |pane, window, cx| {
                 pane.open_item(
@@ -4945,12 +4982,22 @@ impl Workspace {
     {
         let old_item_id = pane.read(cx).active_item().map(|item| item.item_id());
 
-        if let Some(item) = self.find_project_item(&pane, &project_item, cx) {
+        // Search the target pane first, then all other panes, to avoid opening
+        // duplicate tabs when the file is already open in a different pane.
+        let existing_item = self
+            .find_project_item(&pane, &project_item, cx)
+            .or_else(|| {
+                self.panes
+                    .iter()
+                    .filter(|p| *p != &pane)
+                    .find_map(|p| self.find_project_item(p, &project_item, cx))
+            });
+
+        if let Some(item) = existing_item {
             if !keep_old_preview
                 && let Some(old_id) = old_item_id
                 && old_id != item.item_id()
             {
-                // switching to a different item, so unpreview old active item
                 pane.update(cx, |pane, _| {
                     pane.unpreview_item_if_preview(old_id);
                 });
